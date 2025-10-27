@@ -1,5 +1,5 @@
 use std::fs::create_dir_all;
-use std::process::exit;
+use std::process::{exit, Command};
 use std::{env, thread, time};
 
 use clap::{Parser, ValueEnum};
@@ -135,7 +135,32 @@ fn obtain_passphrase() -> Result<Zeroizing<String>, SessionError> {
         return Ok(Zeroizing::new(value));
     }
 
+    if let Some(secret) = fetch_passphrase_from_keyring() {
+        return Ok(secret);
+    }
+
     prompt_password("Hyprsession passphrase: ")
         .map(Zeroizing::new)
         .map_err(SessionError::Io)
+}
+
+/// Attempts to read the passphrase from GNOME Keyring via `secret-tool`.
+fn fetch_passphrase_from_keyring() -> Option<Zeroizing<String>> {
+    let output = Command::new("secret-tool")
+        .args(["lookup", "hyprsession", "passphrase"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let secret = String::from_utf8(output.stdout).ok()?;
+    let secret = secret.trim_end_matches(|c| c == '\n' || c == '\r').to_owned();
+
+    if secret.is_empty() {
+        return None;
+    }
+
+    Some(Zeroizing::new(secret))
 }
