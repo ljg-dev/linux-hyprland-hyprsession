@@ -22,7 +22,7 @@ makepkg -i
 #### NixOS
 Add the input to your `flake.nix`
 ```
-hyprsession.url = "github:joshurtree/hyprsession"
+hyprsession.url = "github:ljg-dev/linux-hyprland-hyprsession"
 ```
 
 Then either add the package to your `configuration.nix` or use `${inputs.hyprsession.packages.${pkgs.system}.hyprsession}/bin/hyprsession` in place of `hyprsession` to run the program.
