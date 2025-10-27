@@ -1,8 +1,10 @@
 use std::fs::create_dir_all;
-use std::process::{exit, Command};
+use std::io::Write;
+use std::process::{exit, Command, Stdio};
 use std::{env, thread, time};
 
 use clap::{Parser, ValueEnum};
+use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
 use rpassword::prompt_password;
 use zeroize::Zeroizing;
 
@@ -139,9 +141,19 @@ fn obtain_passphrase() -> Result<Zeroizing<String>, SessionError> {
         return Ok(secret);
     }
 
-    prompt_password("Hyprsession passphrase: ")
-        .map(Zeroizing::new)
-        .map_err(SessionError::Io)
+    match generate_and_store_passphrase() {
+        Ok(secret) => Ok(secret),
+        Err(err) => {
+            eprintln!(
+                "Failed to create passphrase in GNOME Keyring automatically: {}\n\
+Fallback to interactive prompt.",
+                err
+            );
+            prompt_password("Hyprsession passphrase: ")
+                .map(Zeroizing::new)
+                .map_err(SessionError::Io)
+        }
+    }
 }
 
 /// Attempts to read the passphrase from GNOME Keyring via `secret-tool`.
@@ -156,11 +168,55 @@ fn fetch_passphrase_from_keyring() -> Option<Zeroizing<String>> {
     }
 
     let secret = String::from_utf8(output.stdout).ok()?;
-    let secret = secret.trim_end_matches(|c| c == '\n' || c == '\r').to_owned();
+    let secret = secret
+        .trim_end_matches(|c| c == '\n' || c == '\r')
+        .to_owned();
 
     if secret.is_empty() {
         return None;
     }
 
     Some(Zeroizing::new(secret))
+}
+
+fn generate_and_store_passphrase() -> Result<Zeroizing<String>, SessionError> {
+    let passphrase = Zeroizing::new(generate_random_passphrase(48));
+    store_passphrase_in_keyring(passphrase.as_ref())?;
+    Ok(passphrase)
+}
+
+fn generate_random_passphrase(length: usize) -> String {
+    let mut rng = OsRng;
+    (&mut rng)
+        .sample_iter(&Alphanumeric)
+        .take(length)
+        .map(char::from)
+        .collect()
+}
+
+fn store_passphrase_in_keyring(secret: &str) -> Result<(), SessionError> {
+    let mut child = Command::new("secret-tool")
+        .args(["store", "--label=Hyprsession", "hyprsession", "passphrase"])
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(SessionError::Io)?;
+
+    {
+        let stdin = child.stdin.as_mut().ok_or_else(|| {
+            SessionError::InvalidData("Failed to access stdin for secret-tool".into())
+        })?;
+        stdin
+            .write_all(secret.as_bytes())
+            .map_err(SessionError::Io)?;
+    }
+
+    let status = child.wait().map_err(SessionError::Io)?;
+    if !status.success() {
+        return Err(SessionError::InvalidData(format!(
+            "`secret-tool store` exited with status {}",
+            status
+        )));
+    }
+
+    Ok(())
 }
